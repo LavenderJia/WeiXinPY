@@ -7,6 +7,7 @@ import datetime
 import requests
 import threading
 from mitmproxy import http
+from mitmproxy import ctx
 from requests.cookies import RequestsCookieJar
 from .Data import *
 
@@ -24,7 +25,8 @@ class Rules(object):
         # 打开用于替换的图片
         self._img = open("1.png", "rb").read()
         # 初始化数据层
-        self._data_service: DataService = SqlLiteImpl()
+        self._data_service: DataService = MySqlImpl()
+        self.msg = None
         # 存储需要跳转抓取的文章sn列表
         self.sn_list = []
         # sn列表游标
@@ -36,11 +38,13 @@ class Rules(object):
         # 过滤规则：过滤器表达式 -> function(self, flow)
         self.rules_dict = {
             '~u mmbiz.qpic.cn/mmbiz_jpg': self.replace_image,
-            '~u /mp/profile_ext\?action=home & ~ts text/html': self.history_html,
-            '~u /mp/profile_ext\?action=urlcheck': self.url_check,
+            #'~u /mp/profile_ext\?action=home & ~ts text/html': self.history_html,
+            #'~u /mp/profile_ext\?action=urlcheck': self.url_check,
             # '~u /mp/profile_ext\?action=getmsg & ~ts application/json': self.history_json,
             '~u /mp/getappmsgext': self.article_info,
-            '~u mp.weixin.qq.com/s\?__': self.article_content
+            '~u mp.weixin.qq.com/s\?__': self.article_content,
+            '~u mp.weixin.qq.com/mp/appmsg/show\?__': self.article_content,
+            '~u mp.weixin.qq.com/mp/appmsg_comment': self.article_comment
         }
 
     def replace_image(self, flow: http.HTTPFlow) -> None:
@@ -127,18 +131,22 @@ class Rules(object):
         提取文章其余信息
         :param flow: http流
         """
-        request_url = flow.request.headers["Referer"]
-        sn = re.search(r'sn=([a-z0-9]+)', request_url).group(1)
-        msg: Msg = self._data_service.get_msg(sn)
+        #request_url = flow.request.headers["Referer"]
+        #sn = re.search(r'sn=([a-z0-9]+)', request_url).group(1)
+        #msg: Msg = self._data_service.get_uncrawled_link()
         text = flow.response.text
         json_object = json.loads(text, encoding='utf-8')
-        msg.like_num = json_object["appmsgstat"]["like_num"]
-        msg.read_num = json_object["appmsgstat"]["read_num"]
-        msg.reward_num = json_object["reward_total_count"] if len(json_object["reward_head_imgs"]) > 0 else 0
-        msg.comment_num = json_object["comment_count"]
-        msg.reward_flag = json_object["user_can_reward"] if "user_can_reward" in json_object.keys() else 0
-        msg.comment_flag = json_object["comment_enabled"]
-        self._data_service.save_msg(msg)
+        if 'appmsgstat' not in json_object.keys():
+            return
+
+        if self.msg is not None:
+            self.msg.like_num = json_object["appmsgstat"]["like_num"]
+            self.msg.read_num = json_object["appmsgstat"]["read_num"]
+            self.msg.reward_num = json_object["reward_total_count"] if len(json_object["reward_head_imgs"]) > 0 else 0
+            #msg.comment_num = json_object["comment_count"]
+            #msg.reward_flag = json_object["user_can_reward"] if "user_can_reward" in json_object.keys() else 0
+            #msg.comment_flag = json_object["comment_enabled"]
+            self._data_service.save_msg(self.msg)
 
     def article_content(self, flow: http.HTTPFlow) -> None:
         """
@@ -147,7 +155,7 @@ class Rules(object):
         """
         text = flow.response.text
         request_url = flow.request.url
-        if len(self.sn_list) == 0:
+        """if len(self.sn_list) == 0:
             biz = re.search(r'__biz=([a-zA-Z0-9|=]+)', request_url).group(1)
             self.sn_list = self._data_service.get_blank_msg(biz)
             self.sn_p = -1
@@ -156,9 +164,9 @@ class Rules(object):
             account.weixin_id = weixin_id
             account.updated_time = datetime.datetime.now()
             self._data_service.save_account(account)
-        else:
-            # 取出文章并更新内容
-            content = ""
+        else:"""
+         # 取出文章并更新内容
+        """content = ""
             for t in re.findall(r'<p(.*?)>(.*?)</p>', text):
                 line = self._remove_escapes(t[1])
                 if re.match(r'<br(.*?)>', line) is not None:
@@ -168,20 +176,46 @@ class Rules(object):
                 else:
                     line = re.sub(r'<(.*?)>', '', line) + '\n'
                 content += line
+                
             msg: Msg = self._data_service.get_msg(self.sn_list[self.sn_p])
             msg.content = content
             msg.updated_time = datetime.datetime.now()
             self._put_msg(msg)
-        self.sn_p += 1
-        # 如果还有等待抓取的文章，则设置下一跳的js
-        if self.sn_p < len(self.sn_list):
-            msg: Msg = self._data_service.get_msg(self.sn_list[self.sn_p])
-            next_link = "https://mp.weixin.qq.com/s?__biz=%s&mid=%s&idx=%s&sn=%s#wechat" \
-                        % (msg.biz, msg.mid, msg.idx, msg.sn)
-            delay_time = int(random.random() * 2 + 1)
-            insert_meta = '<meta http-equiv="refresh" content="' + str(delay_time) + ';url=' + next_link + '" />'
-            text = text.replace('</title>', '</title>' + insert_meta)
+        self.sn_p += 1"""
+        if self.msg is not None:
+            content = Content()
+            content.msg_id = self.msg.id
+            ctx.log(str(self.msg.id))
+            content.content = str(text)
+            content.crawled_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._data_service.save_content(content)
+            # 如果还有等待抓取的文章，则设置下一跳的js
+            #if self.sn_p < len(self.sn_list):
+                #msg: Msg = self._data_service.get_msg(self.sn_list[self.sn_p])
+        self.msg = self._data_service.get_uncrawled_link()
+        next_link = self.msg.msg_link
+        delay_time = int(random.random() * 2 + 1)
+        insert_meta = '<meta http-equiv="refresh" content="' + str(delay_time) + ';url=' + next_link + '" />'
+        text = text.replace('</title>', '</title>' + insert_meta)
         flow.response.set_text(text)
+
+    def article_comment(self, flow: http.HTTPFlow) -> None:
+        text = flow.response.text
+        json_object = json.loads(text, encoding='utf-8')
+        elected_comment = json_object['elected_comment']
+        if self.msg is not None:
+            for one in elected_comment:
+                comment = Comment()
+                comment.msg_id = self.msg.id
+                comment.content = one['content']
+                comment.create_time = one['create_time']
+                comment.is_from_friend = one['is_from_friend']
+                comment.is_from_me = one['is_from_me']
+                comment.is_top = one['is_top']
+                comment.like_num = one['like_num']
+                comment.user_name = one['nick_name']
+                comment.reply = str(one['reply'])
+                self._data_service.save_comment(comment)
 
     @staticmethod
     def _remove_escapes(s: str) -> str:
@@ -240,7 +274,7 @@ class Rules(object):
         """
         数据库存储进程，用于存储抓取的历史消息
         """
-        data_service = SqlLiteImpl()  # SQLlite连接只能在创建的线程中使用
+        data_service = MySqlImpl()  # SQLlite连接只能在创建的线程中使用
         while True:
             while (not self.msg_queue.empty()) and self.msg_lock.acquire():
                 data_service.save_msg(self.msg_queue.get())

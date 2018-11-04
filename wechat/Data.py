@@ -1,139 +1,114 @@
 # coding=utf-8
 from .Model import *
-import sqlite3
-
+import pymysql
+from mitmproxy import ctx
 
 class DataService(object):
     """
     数据层接口，不同数据库可分别实现
     """
 
-    def save_account(self, account: Account):
+    def update_msg(self, msg: Msg):
         """
-        保存一个公众号信息（若不存在则更新）
-        :param account: 公众号对象
-        """
-        pass
-
-    def save_msg(self, msg: Msg):
-        """
-        保存一篇文章（若不存在则更新）
+        保存文章信息（若存在则更新）
         :param msg:
         """
         pass
 
-    def get_account(self, biz):
+    def save_content(self, content: Content):
         """
-        根据biz号获取公众号
-        :param biz: biz
-        """
-        pass
-
-    def get_msg(self, sn):
-        """
-        根据sm号获取一篇文章
-        :param sn: 文章url里的sn参数
-        :return: 从数据库取出的文章
-        """
-        pass
-
-    def get_blank_msg(self, biz):
-        """
-        获取公众号未抓取文章的sn列表
-        :param biz: 公众号id
-        :return: 文章的sn列表
-        """
-        pass
-
-
-class SqlLiteImpl(DataService):
-
-    def __init__(self):
-        # 建立数据库连接
-        self.conn = sqlite3.connect('weixin.db')
-        self.conn.row_factory = sqlite3.Row
-
-    @staticmethod
-    def insert_sql(obj: object, table_name) -> (str, tuple):
-        """
-        返回插入语句及参数
-        :param obj: 待插入对象
-        :param table_name: 表名
-        :return: (str, tuple) sql语句, 参数
-        """
-        attrs = [x for x in dir(obj) if x[0] != '_']
-        sql = "INSERT INTO " + table_name + "(" + ",".join(attrs) + ")" + " VALUES (" + ",".join(
-            ['?'] * len(attrs)) + ");"
-        params = tuple((getattr(obj, x) for x in attrs))
-        return sql, params
-
-    @staticmethod
-    def update_sql(obj: object, table_name, unique_key) -> (str, tuple):
-        """
-        返回更新语句及参数
-        :param obj: 待更新对象
-        :param table_name: 表名
-        :param unique_key: 主键名
-        :return: (str, tuple) sql语句, 参数
-        """
-        attrs = [x for x in dir(obj) if x[0] != '_']
-        attrs.remove(unique_key)
-        sql = "UPDATE " + table_name + " SET " + " = ?, ".join(attrs) + " = ? WHERE " + unique_key + " = (?);"
-        attrs.append(unique_key)
-        params = tuple((getattr(obj, x) for x in attrs))
-        return sql, params
-
-    def get_one_object(self, obj: object, table_name: str, unique_key: str, unique_value: str):
-        """
-        根据unique键值获取一个唯一的row对象
-        :param obj: 等待填充的对象
-        :param table_name: 表名
-        :param unique_key: unique键
-        :param unique_value: unique键值
-        :return: 唯一对象（未找到返回None）
-        """
-        c = self.conn.cursor()
-        c.execute("SELECT * FROM " + table_name + " WHERE " + unique_key + "=?;", (unique_value,))
-        row = c.fetchone()
-        if row is None:
-            return None
-        for key in row.keys():
-            setattr(obj, key, row[key])
-
-    def save_object(self, obj: object, table_name: str, unique_key: str) -> None:
-        """
-        根据一个主键保存一个对象
-        :param obj: 待保存对象
-        :param table_name:
-        :param unique_key:
+        保存文章内容
+        :param content:
         :return:
         """
-        c = self.conn.cursor()
-        c.execute("SELECT * FROM " + table_name + " WHERE " + unique_key + "=?;", (getattr(obj, unique_key),))
-        sql, params = self.insert_sql(obj, table_name) if c.fetchone() is None else self.update_sql(obj, table_name, unique_key)
-        c.execute(sql, params)
-        self.conn.commit()
+        pass
 
-    def save_account(self, account: Account):
-        self.save_object(account, 'account', 'biz')
+    def save_comment(self, comment: Comment):
+        """
+        保存评论内容
+        :param comment:
+        :return:
+        """
+        pass
 
-    def save_msg(self, msg: Msg):
-        self.save_object(msg, 'msg', 'sn')
+    def get_uncrawled_link(self):
+        """
+        获取未抓取的文章的url
+        :return:返回未抓取的文章的信息，格式为{id:'', link:''}
+        """
+        pass
 
-    def get_account(self, biz):
-        account = Account()
-        self.get_one_object(account, 'account', 'biz', biz)
-        return account
 
-    def get_msg(self, sn):
-        msg = Msg()
-        self.get_one_object(msg, 'msg', 'sn', sn)
-        return msg
 
-    def get_blank_msg(self, biz):
-        c = self.conn.cursor()
-        c.execute("SELECT sn FROM msg WHERE biz='" + biz + "' AND content ISNULL;")
-        sn_list = []
-        for row in c.fetchall():
-            sn_list.append(row[0])
-        return sn_list
+class MySqlImpl(DataService):
+    def __init__(self):
+        self.db = pymysql.connect("localhost", "root", "Lavender124", "wechat")
+
+    def update_msg(self, msg: Msg):
+        cursor =  self.db.cursor()
+        sql = "UPDATE tmp_uncrawled_articles SET read_num = '%d', like_num = '%d',\
+         reward_num = '%d', WHERE id = '%d'" % \
+              (msg.read_num, msg.like_num, msg.reward_num, msg.id)
+        try:
+            # 执行SQL语句
+            cursor.execute(sql)
+            # 提交到数据库执行
+            self.db.commit()
+        except:
+            # 发生错误时回滚
+            self.db.rollback()
+
+    def save_content(self, content: Content):
+        #ctx.log(content.msg_id)
+        ctx.log(content.crawled_time)
+        cursor = self.db.cursor()
+        pymysql.escape_string("'")
+        sql1 = "INSERT INTO content(msg_id, content, crawled_time) VALUES ('%d', \'%s\', '%s')" % (content.msg_id, pymysql.escape_string(content.content), content.crawled_time)
+        sql2 = "UPDATE tmp_uncrawled_articles SET content_gotten = 1 WHERE id = '%d'" % content.msg_id
+
+        try:
+            # 执行SQL语句
+            cursor.execute(sql1)
+            cursor.execute(sql2)
+            # 提交到数据库执行
+            self.db.commit()
+        except Exception as e:
+            # 发生错误时回滚
+            self.db.rollback()
+            ctx.log(str(e))
+
+    def save_comment(self, comment: Comment):
+        cursor = self.db.cursor()
+        sql = "INSERT INTO comment(msg_id, user_name, content, create_time, \
+        like_num, is_from_friend, is_from_me, is_top, reply) VALUES ('%d', '%s', '%s', '%s', \
+        '%d', '%d', '%d', '%d', '%s')"%(comment.msg_id, comment.user_name, comment.content, comment.create_time, \
+                                        comment.like_num, comment.is_from_friend, comment.is_from_me, comment.is_top, comment.reply)
+
+
+        try:
+            # 执行SQL语句
+            cursor.execute(sql)
+             # 提交到数据库执行
+            self.db.commit()
+        except:
+            # 发生错误时回滚
+             self.db.rollback()
+
+    def get_uncrawled_link(self):
+        cursor = self.db.cursor()
+        sql = "SELECT * FROM tmp_uncrawled_articles WHERE content_gotten is null LIMIT 1"
+        try:
+            # 执行SQL语句
+            cursor.execute(sql)
+            # 获取所有记录列表
+            result = cursor.fetchone()
+            msg = Msg()
+            msg.id = result[0]
+            msg.msg_link = result[2]
+            return msg
+        except:
+           pass
+
+
+
+
